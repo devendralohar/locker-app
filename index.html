@@ -92,7 +92,7 @@ h1,h2,h3{font-family:var(--display);margin:0;letter-spacing:-.01em}
 .lockv{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;max-width:320px;margin:0 auto}
 .lockic{width:64px;height:64px;border-radius:18px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
 .lockic svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.lockv input{width:100%;text-align:center;font:500 26px var(--mono);letter-spacing:.4em;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--surface)}
+.lockv input{width:100%;text-align:center;font:500 22px var(--mono);letter-spacing:.12em;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--surface)}
 .lockv .btn{width:100%}
 
 #viewer{position:fixed;inset:0;z-index:60;background:#0B0D1A;color:#fff;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
@@ -130,19 +130,25 @@ const TYPES=['Aadhaar card','PAN card','Passport','Driving licence','Voter ID','
 const WARN=[30,60,90,180];
 const cfg={members:[{id:'m1',name:'Me'}],warn:90,theme:'',pin:'',salt:'',seeded:false};
 let docs=[],db=null;
-const S={member:'all',locked:false,showNum:false};
+const S={member:'all',locked:false,showNum:false,kdf:null};
 const isPdf=f=>f.type==='application/pdf'||/\.pdf$/i.test(f.name||'');
-const U=new WeakMap();const url=b=>{if(!U.has(b))U.set(b,URL.createObjectURL(b));return U.get(b)};
+let U=new WeakMap();const URLS=new Set();
+const url=b=>{if(!U.has(b)){const u=URL.createObjectURL(b);U.set(b,u);URLS.add(u)}return U.get(b)};
+function revokeUrls(){URLS.forEach(u=>URL.revokeObjectURL(u));URLS.clear();U=new WeakMap()}
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.append(t);setTimeout(()=>t.remove(),2600)}
 
 /* ---------- storage ---------- */
-function openDB(){return new Promise(res=>{try{const q=indexedDB.open('family-locker',1);q.onupgradeneeded=()=>q.result.createObjectStore('docs',{keyPath:'id'});q.onsuccess=()=>res(q.result);q.onerror=()=>res(null);q.onblocked=()=>res(null)}catch(e){res(null)}})}
+function openDB(){return new Promise(res=>{try{const q=indexedDB.open('family-locker',2);q.onupgradeneeded=()=>{const d=q.result;if(!d.objectStoreNames.contains('docs'))d.createObjectStore('docs',{keyPath:'id'});if(!d.objectStoreNames.contains('meta'))d.createObjectStore('meta',{keyPath:'k'})};q.onsuccess=()=>res(q.result);q.onerror=()=>res(null);q.onblocked=()=>res(null)}catch(e){res(null)}})}
 const st=m=>db.transaction('docs',m).objectStore('docs');
 function dbAll(){return new Promise(r=>{if(!db)return r([]);try{const q=st('readonly').getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>r([])}catch(e){r([])}})}
-function putDoc(d){
+async function putDoc(d){
   const i=docs.findIndex(x=>x.id===d.id);if(i<0)docs.push(d);else docs[i]=d;
-  if(!db)return Promise.resolve(false);
-  return new Promise(r=>{try{const q=st('readwrite').put(d);q.onsuccess=()=>r(true);q.onerror=()=>{toast('Could not save. Phone storage may be full.');r(false)}}catch(e){toast('Could not save.');r(false)}});
+  if(!db)return false;
+  try{
+    const rec=S.kdf?await seal(d):d;
+    await new Promise((res,rej)=>{const q=st('readwrite').put(rec);q.onsuccess=()=>res();q.onerror=()=>rej(q.error)});
+    return true;
+  }catch(e){toast('Could not save. Phone storage may be full.');return false}
 }
 function delDoc(id){docs=docs.filter(x=>x.id!==id);if(db)try{st('readwrite').delete(id)}catch(e){}}
 function saveCfg(){try{localStorage.setItem('fl_cfg',JSON.stringify(cfg))}catch(e){}}
@@ -153,10 +159,77 @@ const memberName=id=>(cfg.members.find(m=>m.id===id)||cfg.members[0]).name;
 
 /* ---------- PIN ---------- */
 async function hashPin(pin,salt){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(salt+':'+pin));return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('')}
-function lockNow(){if(!cfg.pin)return;state_close();S.locked=true;render()}
+/* ---------- encryption (AES-256-GCM, key from passcode with PBKDF2) ---------- */
+const enc=new TextEncoder(),dec=new TextDecoder(),CHECK='family-locker-ok';
+let KEY=null;
+const u8b64=u=>{let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)};
+const b64u8=s=>{const bin=atob(s),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u};
+const hasLock=()=>!!(S.kdf||cfg.pin);
+async function deriveKey(pass,salt,iter){
+  const base=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+async function encBuf(buf){const iv=crypto.getRandomValues(new Uint8Array(12));const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},KEY,buf);return {iv,ct}}
+const decBuf=(iv,ct,key)=>crypto.subtle.decrypt({name:'AES-GCM',iv},key||KEY,ct);
+async function verify(key,kdf){const pt=await decBuf(b64u8(kdf.iv),b64u8(kdf.check),key);if(dec.decode(pt)!==CHECK)throw new Error('bad passcode')}
+async function checkPass(pass){try{const k=await deriveKey(pass,b64u8(S.kdf.salt),S.kdf.iter);await verify(k,S.kdf);return k}catch(e){return null}}
+async function seal(d){
+  const meta={type:d.type,name:d.name,member:d.member,number:d.number,issued:d.issued,expiry:d.expiry,notes:d.notes,sample:!!d.sample,files:(d.files||[]).map(f=>({name:f.name,type:f.type}))};
+  const m=await encBuf(enc.encode(JSON.stringify(meta))),files=[];
+  for(const f of d.files||[]){const e=await encBuf(await f.blob.arrayBuffer());files.push({iv:e.iv,ct:e.ct})}
+  return {id:d.id,v:2,iv:m.iv,meta:m.ct,files};
+}
+async function unsealRec(r,key){
+  const meta=JSON.parse(dec.decode(await decBuf(r.iv,r.meta,key))),files=[];
+  for(let i=0;i<r.files.length;i++){const m=meta.files[i];files.push({name:m.name,type:m.type,blob:new Blob([await decBuf(r.files[i].iv,r.files[i].ct,key)],{type:m.type})})}
+  const rest=Object.assign({},meta);delete rest.files;
+  return Object.assign({id:r.id},rest,{files});
+}
+function commit(recs,kdf){return new Promise((res,rej)=>{
+  const tx=db.transaction(['docs','meta'],'readwrite'),ds=tx.objectStore('docs'),ms=tx.objectStore('meta');
+  recs.forEach(r=>ds.put(r));if(kdf)ms.put({k:'kdf',v:kdf});else ms.delete('kdf');
+  tx.oncomplete=()=>res();tx.onerror=tx.onabort=()=>rej(tx.error||new Error('save failed'));
+})}
+function getMeta(){return new Promise(r=>{try{const q=db.transaction('meta').objectStore('meta').get('kdf');q.onsuccess=()=>r(q.result?q.result.v:null);q.onerror=()=>r(null)}catch(e){r(null)}})}
+async function loadAll(){
+  const raw=await dbAll(),out=[];let bad=0;
+  for(const r of raw){try{out.push(r.iv&&r.meta?await unsealRec(r,KEY):r)}catch(e){bad++}}
+  docs=out;if(bad)toast(bad+' item'+(bad>1?'s':'')+' could not be opened.');
+}
+async function enableEnc(pass){
+  if(!db)throw new Error('no storage');
+  const salt=crypto.getRandomValues(new Uint8Array(16)),iter=600000,key=await deriveKey(pass,salt,iter);
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const check=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(CHECK)));
+  const kdf={salt:u8b64(salt),iter,iv:u8b64(iv),check:u8b64(check)};
+  const old=KEY;KEY=key;
+  try{const recs=[];for(const d of docs)recs.push(await seal(d));await commit(recs,kdf)}catch(e){KEY=old;throw e}
+  S.kdf=kdf;cfg.pin='';cfg.salt='';saveCfg();
+}
+async function disableEnc(){await commit(docs.slice(),null);KEY=null;S.kdf=null}
+function saveText(name,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000)}
+async function backup(){
+  if(!S.kdf)return backupPlain();
+  toast('Preparing encrypted backup...');
+  const recs=[];
+  for(const d of docs){const r=await seal(d);recs.push({id:r.id,iv:u8b64(r.iv),meta:u8b64(new Uint8Array(r.meta)),files:r.files.map(f=>({iv:u8b64(f.iv),ct:u8b64(new Uint8Array(f.ct))}))})}
+  saveText('family-locker-backup-'+today()+'.json',JSON.stringify({app:'family-locker',v:2,enc:true,kdf:S.kdf,members:cfg.members,docs:recs}));
+}
+let pendingRestore=null;
+async function restore(file){
+  let j;try{j=JSON.parse(await file.text())}catch(e){j=null}
+  if(!j||j.app!=='family-locker'||!Array.isArray(j.docs)){toast('That is not a Family Locker backup.');return}
+  if(j.enc){
+    pendingRestore=j;
+    sheet(`<div class="in"><h2>Encrypted backup</h2><p class="muted" style="margin:0">Enter the passcode this backup was made with.</p><label class="fld"><span>Backup passcode</span><input id="bkPass" type="password" autocomplete="off"></label><div id="pinErr" class="err"></div><div class="acts"><button class="btn" data-act="restoreenc">Restore</button><button class="btn ghost" data-act="close">Cancel</button></div></div>`,'Encrypted backup');
+    return;
+  }
+  return restorePlain(file);
+}
+function lockNow(){if(!hasLock())return;state_close();revokeUrls();KEY=null;if(S.kdf)docs=[];S.locked=true;render()}
 function state_close(){closeViewer();$('#layer').innerHTML='';document.body.classList.remove('lock');S.showNum=false}
 let hiddenAt=0;
-document.addEventListener('visibilitychange',()=>{if(document.hidden)hiddenAt=Date.now();else if(cfg.pin&&hiddenAt&&Date.now()-hiddenAt>30000)lockNow()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)hiddenAt=Date.now();else if(hasLock()&&hiddenAt&&Date.now()-hiddenAt>30000)lockNow()});
 
 /* ---------- status ---------- */
 const dur=n=>n<60?n+(n===1?' day':' days'):Math.round(n/30)+' months';
@@ -350,34 +423,39 @@ function openSettings(){
   <label class="fld"><span>Warn me before expiry</span><select id="s_warn">${WARN.map(w=>`<option value="${w}" ${w===cfg.warn?'selected':''}>${w} days</option>`).join('')}</select></label>
   <label class="fld"><span>Appearance</span><select id="s_theme"><option value="" ${cfg.theme===''?'selected':''}>Follow phone</option><option value="light" ${cfg.theme==='light'?'selected':''}>Light</option><option value="dark" ${cfg.theme==='dark'?'selected':''}>Dark</option></select></label>
   <div class="acts"><button class="btn" data-act="savesettings">Save</button></div>
-  <h3 style="margin-top:6px">App lock</h3>
-  <p class="note" style="margin:0">${cfg.pin?'A PIN is set. The app locks after you leave it for 30 seconds.':'Set a PIN so nobody can open the app on your phone. The PIN keeps others out of the app. It does not encrypt the files.'}</p>
-  <div class="acts"><button class="btn ghost" data-act="setpin">${cfg.pin?'Change PIN':'Set a PIN'}</button>${cfg.pin?'<button class="btn ghost" data-act="rmpin">Remove PIN</button>':''}</div>
+  <h3 style="margin-top:6px">Encryption and lock</h3>
+  <p class="note" style="margin:0">${S.kdf?'Encryption is on. Your files and document details are stored scrambled with your passcode, and the app locks after 30 seconds away. If you forget the passcode, nothing can be recovered.':'Turn this on to scramble your files and document details with a passcode. Until then, they are stored as ordinary files on this phone.'}</p>
+  <div class="acts"><button class="btn ghost" data-act="${S.kdf?'chpin':'setpin'}">${S.kdf?'Change passcode':'Turn on encryption'}</button>${S.kdf?'<button class="btn ghost" data-act="rmpin">Turn off encryption</button>':''}</div>
   <h3 style="margin-top:6px">Your data</h3>
+  <p class="note" style="margin:0">${S.kdf?'Backups are encrypted with your passcode.':'Backups are not encrypted until you turn on encryption.'}</p>
   <div class="acts"><button class="btn ghost" data-act="backup">Download backup</button><label class="btn ghost">Restore backup<input id="restoreIn" type="file" accept=".json,application/json"></label></div>
   ${sample?'<button class="btn ghost" data-act="rmsample">Remove sample documents</button>':''}
   <button class="btn bad" data-act="wipe">Delete everything</button>
   <p class="note">Everything stays on this phone. Clearing Chrome's site data deletes it, so download a backup now and then. To install: Chrome menu, then Add to Home screen.</p></div>`,'Settings');
 }
-function openPin(){
-  sheet(`<div class="in"><h2>${cfg.pin?'Change PIN':'Set a PIN'}</h2>
-  <label class="fld"><span>New PIN (4 to 6 digits)</span><input id="pin1" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
-  <label class="fld"><span>Repeat PIN</span><input id="pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
-  <p class="note" style="margin:0">If you forget the PIN, the only way back in is to erase all data in the app, so keep a backup.</p><div id="pinErr" class="err"></div>
-  <div class="acts"><button class="btn" data-act="savepin">Save PIN</button><button class="btn ghost" data-act="close">Cancel</button></div></div>`,'PIN');
+function openPin(mode){
+  const on=!!S.kdf;
+  sheet(`<div class="in"><h2>${mode==='remove'?'Turn off encryption':on?'Change passcode':'Turn on encryption'}</h2>
+  ${on?'<label class="fld"><span>Current passcode</span><input id="pinCur" type="password" autocomplete="off"></label>':''}
+  ${mode!=='remove'?`<label class="fld"><span>New passcode (6 or more characters)</span><input id="pin1" type="password" autocomplete="off"></label>
+  <label class="fld"><span>Repeat passcode</span><input id="pin2" type="password" autocomplete="off"></label>
+  <p class="note" style="margin:0">A passcode of only numbers can be guessed by trying every combination if someone copies the data off your phone. A phrase of 8 or more characters is much safer.</p>
+  <p class="note" style="margin:0"><b>If you forget the passcode, your files cannot be recovered.</b> Keep a backup and remember it.</p>`:'<p class="note" style="margin:0">Your files and details will be stored unscrambled again, and the app will no longer lock.</p>'}
+  <div id="pinErr" class="err" aria-live="polite"></div>
+  <div class="acts"><button class="btn" data-act="savepin" data-mode="${mode}">${mode==='remove'?'Turn off':on?'Change passcode':'Turn on encryption'}</button><button class="btn ghost" data-act="close">Cancel</button></div></div>`,'Passcode');
 }
 
 /* ---------- backup ---------- */
 function b64(blob){return new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]||'');fr.onerror=()=>res('');fr.readAsDataURL(blob)})}
 function fromB64(d,t){const bin=atob(d),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new Blob([u],{type:t})}
-async function backup(){
+async function backupPlain(){
   toast('Preparing backup...');
   const out=[];
   for(const d of docs){out.push(Object.assign({},d,{files:await Promise.all((d.files||[]).map(async f=>({name:f.name,type:f.type,data:await b64(f.blob)})))}))}
   const text=JSON.stringify({app:'family-locker',v:1,members:cfg.members,docs:out});
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download='family-locker-backup-'+today()+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);
 }
-async function restore(file){
+async function restorePlain(file){
   try{
     const j=JSON.parse(await file.text());if(j.app!=='family-locker'||!Array.isArray(j.docs))throw 0;
     (j.members||[]).forEach(m=>{if(m&&m.id&&!cfg.members.some(x=>x.id===m.id))cfg.members.push(m)});
@@ -392,7 +470,7 @@ const lockSvg='<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9"
 function render(){
   applyTheme();
   if(S.locked){
-    $('#app').innerHTML=`<div class="lockv"><div class="lockic">${lockSvg}</div><h1>Family Locker</h1><p class="muted" style="margin:0">Enter your PIN</p><input id="pinIn" type="password" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="PIN"><button class="btn" data-act="unlock">Unlock</button><div id="pinErr" class="err" aria-live="polite"></div><button class="chip" data-act="forgot">Forgot PIN?</button></div>`;
+    $('#app').innerHTML=`<div class="lockv"><div class="lockic">${lockSvg}</div><h1>Family Locker</h1><p class="muted" style="margin:0">Enter your passcode</p><input id="pinIn" type="password" autocomplete="off" aria-label="Passcode"><button class="btn" data-act="unlock">Unlock</button><div id="pinErr" class="err" aria-live="polite"></div><button class="chip" data-act="forgot">Forgot PIN?</button></div>`;
     const i=$('#pinIn');if(i){i.focus();i.addEventListener('keydown',e=>{if(e.key==='Enter')unlock()})}
     return;
   }
@@ -403,7 +481,7 @@ function render(){
   const rest=sorted.filter(d=>!attn.includes(d));
   const rowH=d=>{const s=status(d);return `<button class="row" data-act="open" data-id="${d.id}"><span class="n"><b>${esc(d.name)}</b><div class="s">${esc(d.type)}${S.member==='all'&&cfg.members.length>1?' · '+esc(memberName(d.member)):''}${d.number?' · '+esc(mask(d.number)):''}${d.files&&d.files.length?' · '+d.files.length+' file'+(d.files.length>1?'s':''):''}</div></span><span class="pill ${s.k}">${esc(s.t)}</span></button>`};
   const icon=isDark()?'<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>':'<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>';
-  $('#app').innerHTML=`<header class="head"><span class="brand">Family Locker</span><div class="tools">${cfg.pin?`<button class="ib" data-act="locknow" aria-label="Lock now">${lockSvg}</button>`:''}<button class="ib" data-act="theme" aria-label="Switch theme"><svg viewBox="0 0 24 24">${icon}</svg></button><button class="ib" data-act="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg></button></div></header>
+  $('#app').innerHTML=`<header class="head"><span class="brand">Family Locker</span><div class="tools">${hasLock()?`<button class="ib" data-act="locknow" aria-label="Lock now">${lockSvg}</button>`:''}<button class="ib" data-act="theme" aria-label="Switch theme"><svg viewBox="0 0 24 24">${icon}</svg></button><button class="ib" data-act="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg></button></div></header>
   ${docs.some(d=>d.sample)?'<div class="banner"><span>These are sample documents.</span><button class="chip" data-act="rmsample">Remove</button></div>':''}
   <div class="stats"><div class="stat bad"><span class="label">Expired</span><b>${cnt('bad')}</b></div><div class="stat warn"><span class="label">Expiring</span><b>${cnt('warn')}</b></div><div class="stat ok"><span class="label">Valid</span><b>${cnt('ok')+cnt('none')}</b></div></div>
   ${cfg.members.length>1?`<div class="chips"><button class="chip ${S.member==='all'?'on':''}" data-act="member" data-id="all">Everyone</button>${cfg.members.map(m=>`<button class="chip ${S.member===m.id?'on':''}" data-act="member" data-id="${m.id}">${esc(m.name)}</button>`).join('')}</div>`:''}
@@ -412,10 +490,20 @@ function render(){
   <button class="btn fab" data-act="add">+ Add</button>`;
 }
 async function unlock(){
-  const v=($('#pinIn')||{}).value||'',e=$('#pinErr');
+  const v=($('#pinIn')||{}).value||'',e=$('#pinErr'),btn=$('[data-act="unlock"]');
   if(!v)return;
-  if(await hashPin(v,cfg.salt)===cfg.pin){S.locked=false;render()}
-  else{if(e)e.textContent='Wrong PIN. Try again.';const i=$('#pinIn');if(i){i.value='';i.focus()}}
+  if(!S.kdf){
+    // older PIN-only lock: unlock, then upgrade to real encryption with the same PIN
+    if(await hashPin(v,cfg.salt)===cfg.pin){S.locked=false;render();enableEnc(v).then(()=>toast('Your files are now encrypted'),()=>{})}
+    else{if(e)e.textContent='Wrong passcode. Try again.';const i=$('#pinIn');if(i){i.value='';i.focus()}}
+    return;
+  }
+  if(e)e.textContent='Unlocking...';if(btn)btn.disabled=true;
+  const k=await checkPass(v);
+  if(!k){if(e)e.textContent='Wrong passcode. Try again.';if(btn)btn.disabled=false;const i=$('#pinIn');if(i){i.value='';i.focus()}return}
+  KEY=k;
+  try{await loadAll()}catch(err){toast('Could not open your documents.')}
+  S.locked=false;render();
 }
 
 /* ---------- events ---------- */
@@ -457,13 +545,41 @@ document.addEventListener('click',async e=>{
     case 'savesettings':
       document.querySelectorAll('.mname').forEach(i=>{const m=cfg.members.find(x=>x.id===i.dataset.id);if(m&&i.value.trim())m.name=i.value.trim()});
       cfg.warn=+$('#s_warn').value;cfg.theme=$('#s_theme').value;saveCfg();closeSheet();render();toast('Saved');break;
-    case 'setpin':openPin();break;
+    case 'setpin':openPin('set');break;
+    case 'chpin':openPin('change');break;
+    case 'rmpin':openPin('remove');break;
     case 'savepin':{
-      const p1=$('#pin1').value,p2v=$('#pin2').value,er=$('#pinErr');
-      if(!/^\d{4,6}$/.test(p1)){er.textContent='Use 4 to 6 digits.';break}
-      if(p1!==p2v){er.textContent='The two PINs do not match.';break}
-      cfg.salt=uid()+uid();cfg.pin=await hashPin(p1,cfg.salt);saveCfg();closeSheet();render();toast('PIN set');break}
-    case 'rmpin':cfg.pin='';cfg.salt='';saveCfg();openSettings();render();toast('PIN removed');break;
+      const mode=b.dataset.mode,er=$('#pinErr');
+      if(!db){er.textContent='Storage is not available in this browser, so encryption cannot be used.';break}
+      if(S.kdf&&!(await checkPass($('#pinCur').value))){er.textContent='The current passcode is wrong.';break}
+      if(mode==='remove'){
+        b.disabled=true;er.textContent='Working...';
+        try{await disableEnc();closeSheet();render();toast('Encryption turned off')}catch(err){er.textContent='Could not turn it off. Nothing was changed.';b.disabled=false}
+        break;
+      }
+      const p1=$('#pin1').value,p2v=$('#pin2').value;
+      if(p1.length<6){er.textContent='Use at least 6 characters.';break}
+      if(p1!==p2v){er.textContent='The two passcodes do not match.';break}
+      b.disabled=true;er.textContent='Encrypting. This can take a moment...';
+      try{await enableEnc(p1);closeSheet();render();toast('Your files are now encrypted')}
+      catch(err){er.textContent='Could not encrypt. Nothing was changed.';b.disabled=false}
+      break}
+    case 'restoreenc':{
+      const j=pendingRestore,er=$('#pinErr'),pw=($('#bkPass')||{}).value||'';
+      if(!j)break;
+      er.textContent='Unlocking backup...';
+      try{
+        const key=await deriveKey(pw,b64u8(j.kdf.salt),j.kdf.iter);await verify(key,j.kdf);
+        for(const m of (j.members||[]))if(m&&m.id&&!cfg.members.some(x=>x.id===m.id))cfg.members.push(m);
+        let n=0;
+        for(const r of j.docs){
+          if(docs.some(x=>x.id===r.id))continue;
+          const rec={id:r.id,iv:b64u8(r.iv),meta:b64u8(r.meta),files:r.files.map(f=>({iv:b64u8(f.iv),ct:b64u8(f.ct)}))};
+          await putDoc(await unsealRec(rec,key));n++;
+        }
+        pendingRestore=null;saveCfg();closeSheet();render();toast('Restored '+n+' documents');
+      }catch(err){er.textContent='Wrong passcode for this backup, or the file is damaged.'}
+      break}
     case 'backup':backup();break;
     case 'rmsample':for(const d of docs.filter(x=>x.sample))delDoc(d.id);closeSheet();render();break;
     case 'wipe':
@@ -472,7 +588,8 @@ document.addEventListener('click',async e=>{
   }
 });
 async function wipeAll(){
-  for(const d of docs.slice())delDoc(d.id);
+  if(db)await new Promise(res=>{try{const tx=db.transaction(['docs','meta'],'readwrite');tx.objectStore('docs').clear();tx.objectStore('meta').clear();tx.oncomplete=tx.onerror=tx.onabort=()=>res()}catch(e){res()}});
+  docs=[];KEY=null;S.kdf=null;revokeUrls();
   cfg.members=[{id:'m1',name:'Me'}];cfg.pin='';cfg.salt='';cfg.seeded=true;saveCfg();
   S.locked=false;S.member='all';closeSheet();closeViewer();render();toast('Everything deleted');
 }
@@ -488,8 +605,9 @@ document.addEventListener('change',e=>{
   loadCfg();
   db=await openDB();
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
-  docs=await dbAll();
-  if(!docs.length&&!cfg.seeded){
+  S.kdf=db?await getMeta():null;
+  docs=S.kdf?[]:await dbAll();
+  if(!docs.length&&!cfg.seeded&&!S.kdf){
     cfg.members=[{id:'m1',name:'Me'},{id:'m2',name:'Mom'}];
     const base={files:[],sample:true,notes:'',issued:''};
     for(const d of [
@@ -500,7 +618,7 @@ document.addEventListener('change',e=>{
     ])await putDoc(Object.assign({id:uid()},base,d));
     cfg.seeded=true;saveCfg();
   }
-  if(cfg.pin)S.locked=true;
+  if(hasLock())S.locked=true;
   render();
   if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 })();
