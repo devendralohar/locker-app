@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#3347C7">
+<link rel="manifest" href="manifest.json"><link rel="icon" href="icon-192.png">
+<title>Family Locker</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: sticky header, status summary, family member chips, an "needs attention" list first, then every document sorted by expiry. Detail and forms open as bottom sheets; files open in a full-screen viewer. */
+:root{
+  --bg:#F2F3F8; --surface:#FFFFFF; --ink:#151936; --muted:#5E6485; --line:#DADDEB;
+  --accent:#3347C7; --accent-ink:#FFFFFF; --soft:#E3E7FB;
+  --ok:#1F7A45; --okbg:#DDF1E4; --warn:#8F5600; --warnbg:#FBEBCB; --bad:#B3321F; --badbg:#FADCD6; --shade:rgba(10,12,40,.5);
+  --display:'Space Grotesk','Segoe UI',system-ui,sans-serif; --body:'Inter','Segoe UI',system-ui,sans-serif; --mono:'DM Mono',ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1120; --surface:#171B30; --ink:#E8EAF8; --muted:#9AA0C4; --line:#2A3052;
+  --accent:#8E9CFF; --accent-ink:#0C1236; --soft:#20274A;
+  --ok:#62D08C; --okbg:#17382A; --warn:#F2B65A; --warnbg:#3B2E14; --bad:#FF8B7A; --badbg:#3F1D1D; --shade:rgba(0,0,0,.65); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1120; --surface:#171B30; --ink:#E8EAF8; --muted:#9AA0C4; --line:#2A3052;
+  --accent:#8E9CFF; --accent-ink:#0C1236; --soft:#20274A;
+  --ok:#62D08C; --okbg:#17382A; --warn:#F2B65A; --warnbg:#3B2E14; --bad:#FF8B7A; --badbg:#3F1D1D; --shade:rgba(0,0,0,.65); color-scheme:dark}
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 120px;-webkit-tap-highlight-color:transparent}
+body.lock{overflow:hidden}
+[hidden]{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:560px;margin:0 auto}
+h1,h2,h3{font-family:var(--display);margin:0;letter-spacing:-.01em}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.label{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:700}
+
+.head{position:sticky;top:0;z-index:9;background:var(--bg);padding:12px 0 8px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand{font-family:var(--display);font-weight:700;font-size:21px}
+.tools{display:flex;gap:8px}
+.ib{width:38px;height:36px;border:1px solid var(--line);background:var(--surface);border-radius:10px;display:grid;place-items:center}
+.ib svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.stat b{display:block;font-family:var(--mono);font-size:26px;font-weight:500;line-height:1.2}
+.stat.bad b{color:var(--bad)}.stat.warn b{color:var(--warn)}.stat.ok b{color:var(--ok)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:14px 0 4px;margin:0 -2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-size:14px;font-weight:500;white-space:nowrap;flex:none}
+.chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.sec{margin-top:22px}
+.sec>h2{font-size:16px;margin-bottom:10px}
+.list{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.row .n{min-width:0;overflow-wrap:anywhere}
+.row .s{font-size:12.5px;color:var(--muted)}
+.pill{font-size:12px;font-weight:700;border-radius:999px;padding:4px 10px;white-space:nowrap;flex:none}
+.pill.ok{background:var(--okbg);color:var(--ok)}.pill.warn{background:var(--warnbg);color:var(--warn)}.pill.bad{background:var(--badbg);color:var(--bad)}.pill.none{background:var(--soft);color:var(--muted)}
+.empty{border:1.5px dashed var(--line);border-radius:14px;padding:22px 16px;text-align:center;color:var(--muted)}
+.banner{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--soft);border-radius:12px;padding:10px 14px;font-size:13px;margin-top:10px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--accent);color:var(--accent-ink);border-radius:12px;padding:12px 18px;font-weight:700;min-height:46px;position:relative;text-align:center}
+.btn.ghost{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+.btn.bad{background:none;color:var(--bad);border:1px solid var(--bad)}
+.btn input{position:absolute;opacity:0;width:1px;height:1px}
+.fab{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:20;box-shadow:0 6px 18px rgba(0,0,0,.25);padding:14px 22px;border-radius:999px;font-size:16px}
+
+.back{position:fixed;inset:0;z-index:40;background:var(--shade)}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:41;max-height:92%;overflow-y:auto;background:var(--bg);border-radius:20px 20px 0 0;padding:18px max(16px,env(safe-area-inset-right,0px)) calc(22px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.sheet .in{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.sheet h2{font-size:20px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fld>span{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.04em}
+.fld input,.fld select,.fld textarea{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:11px 12px;width:100%;min-width:0}
+.acts{display:flex;gap:10px;flex-wrap:wrap}.acts .btn{flex:1}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);align-items:center}
+.kv:first-of-type{border-top:0}
+.kv span:first-child{color:var(--muted);font-size:13px}
+.kv .v{text-align:right;overflow-wrap:anywhere;min-width:0}
+.thumbs{display:flex;flex-wrap:wrap;gap:8px}
+.th{width:72px;height:72px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--soft);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--accent)}
+.th img{width:100%;height:100%;object-fit:cover;display:block}
+.frow{display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;margin-bottom:6px}
+.frow span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.frow button{color:var(--bad);font-weight:700;font-size:12px}
+.note{font-size:12.5px;color:var(--muted)}
+.err{color:var(--bad);font-size:13px;min-height:18px}
+
+.lockv{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;max-width:320px;margin:0 auto}
+.lockic{width:64px;height:64px;border-radius:18px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
+.lockic svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.lockv input{width:100%;text-align:center;font:500 26px var(--mono);letter-spacing:.4em;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--surface)}
+.lockv .btn{width:100%}
+
+#viewer{position:fixed;inset:0;z-index:60;background:#0B0D1A;color:#fff;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.vbar{display:flex;align-items:center;gap:8px;padding:10px 12px}
+.vb{background:#ffffff1f;border-radius:8px;padding:8px 12px;font-weight:700;font-size:14px;color:#fff}
+.vt{flex:1;min-width:0;text-align:center;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vt small{display:block;font-size:11px;opacity:.65;font-weight:400}
+.vbody{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:6px}
+.vbody img{max-width:100%;max-height:100%;margin:auto;object-fit:contain}
+.vbody img.zoom{max-width:none;max-height:none;width:240%}
+.vbody canvas{width:100%;max-width:900px;background:#fff;margin-bottom:8px;display:block}
+.vnav{display:flex;gap:10px;padding:8px 12px calc(10px + env(safe-area-inset-bottom,0px))}
+.vnav button{flex:1;background:#ffffff1f;border-radius:8px;padding:10px;color:#fff;font-weight:700}
+.toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:80;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;max-width:90%}
+@media (prefers-reduced-motion:no-preference){.sheet{animation:up .18s ease-out}@keyframes up{from{transform:translateY(30px);opacity:0}}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div id="layer"></div>
+<div id="viewer" hidden></div>
+<script>
+(function(){
+const $=(s,e=document)=>e.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+const p2=n=>String(n).padStart(2,'0');
+const isoD=d=>d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());
+const today=()=>isoD(new Date());
+const addDays=(s,n)=>{const d=new Date(s+'T00:00');d.setDate(d.getDate()+n);return isoD(d)};
+const dayDiff=(a,b)=>Math.round((new Date(b+'T00:00')-new Date(a+'T00:00'))/864e5);
+const fdate=s=>s?new Date(s+'T00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}):'';
+const TYPES=['Aadhaar card','PAN card','Passport','Driving licence','Voter ID','Insurance policy','Vaccination certificate','Birth certificate','Marriage certificate','Vehicle RC','Property paper','Bank document','Other'];
+const WARN=[30,60,90,180];
+const cfg={members:[{id:'m1',name:'Me'}],warn:90,theme:'',pin:'',salt:'',seeded:false};
+let docs=[],db=null;
+const S={member:'all',locked:false,showNum:false};
+const isPdf=f=>f.type==='application/pdf'||/\.pdf$/i.test(f.name||'');
+const U=new WeakMap();const url=b=>{if(!U.has(b))U.set(b,URL.createObjectURL(b));return U.get(b)};
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.append(t);setTimeout(()=>t.remove(),2600)}
+
+/* ---------- storage ---------- */
+function openDB(){return new Promise(res=>{try{const q=indexedDB.open('family-locker',1);q.onupgradeneeded=()=>q.result.createObjectStore('docs',{keyPath:'id'});q.onsuccess=()=>res(q.result);q.onerror=()=>res(null);q.onblocked=()=>res(null)}catch(e){res(null)}})}
+const st=m=>db.transaction('docs',m).objectStore('docs');
+function dbAll(){return new Promise(r=>{if(!db)return r([]);try{const q=st('readonly').getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>r([])}catch(e){r([])}})}
+function putDoc(d){
+  const i=docs.findIndex(x=>x.id===d.id);if(i<0)docs.push(d);else docs[i]=d;
+  if(!db)return Promise.resolve(false);
+  return new Promise(r=>{try{const q=st('readwrite').put(d);q.onsuccess=()=>r(true);q.onerror=()=>{toast('Could not save. Phone storage may be full.');r(false)}}catch(e){toast('Could not save.');r(false)}});
+}
+function delDoc(id){docs=docs.filter(x=>x.id!==id);if(db)try{st('readwrite').delete(id)}catch(e){}}
+function saveCfg(){try{localStorage.setItem('fl_cfg',JSON.stringify(cfg))}catch(e){}}
+function loadCfg(){try{Object.assign(cfg,JSON.parse(localStorage.getItem('fl_cfg')||'{}'))}catch(e){}if(!cfg.members||!cfg.members.length)cfg.members=[{id:'m1',name:'Me'}]}
+function applyTheme(){if(cfg.theme)document.documentElement.dataset.theme=cfg.theme;else document.documentElement.removeAttribute('data-theme')}
+const isDark=()=>{const d=document.documentElement.dataset.theme;return d?d==='dark':matchMedia('(prefers-color-scheme: dark)').matches};
+const memberName=id=>(cfg.members.find(m=>m.id===id)||cfg.members[0]).name;
+
+/* ---------- PIN ---------- */
+async function hashPin(pin,salt){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(salt+':'+pin));return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+function lockNow(){if(!cfg.pin)return;state_close();S.locked=true;render()}
+function state_close(){closeViewer();$('#layer').innerHTML='';document.body.classList.remove('lock');S.showNum=false}
+let hiddenAt=0;
+document.addEventListener('visibilitychange',()=>{if(document.hidden)hiddenAt=Date.now();else if(cfg.pin&&hiddenAt&&Date.now()-hiddenAt>30000)lockNow()});
+
+/* ---------- status ---------- */
+const dur=n=>n<60?n+(n===1?' day':' days'):Math.round(n/30)+' months';
+function status(d){
+  if(!d.expiry)return{k:'none',t:'No expiry',n:99999};
+  const n=dayDiff(today(),d.expiry);
+  if(n<0)return{k:'bad',t:'Expired '+dur(-n)+' ago',n};
+  if(n===0)return{k:'warn',t:'Expires today',n};
+  if(n<=cfg.warn)return{k:'warn',t:'Expires in '+dur(n),n};
+  return{k:'ok',t:'Valid till '+fdate(d.expiry),n};
+}
+const mask=n=>n?('•••• '+String(n).replace(/\s/g,'').slice(-4)):'';
+
+/* ---------- reading documents ---------- */
+const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+function mkDate(y,m,d){y=+y;if(y<100)y+=2000;m=+m;d=+d;if(m<1||m>12||d<1||d>31)return null;return y+'-'+p2(m)+'-'+p2(d)}
+function findDates(t){
+  const r=[];let m;
+  const A=/\b(\d{1,2})[\s\-\/.,]{0,3}(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-\/.,]{0,3}(\d{4}|\d{2})\b/gi;
+  while((m=A.exec(t)))r.push([m.index,mkDate(m[3],MON[m[2].toLowerCase()],m[1])]);
+  const B=/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/gi;
+  while((m=B.exec(t)))r.push([m.index,mkDate(m[3],MON[m[1].toLowerCase()],m[2])]);
+  const C=/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\b/g;
+  while((m=C.exec(t)))r.push([m.index,mkDate(m[3],m[2],m[1])]);
+  return r.filter(x=>x[1]).sort((a,b)=>a[0]-b[0]);
+}
+function dateAfter(t,re,span){const i=t.search(re);if(i<0)return null;const d=findDates(t.slice(i,i+(span||60)))[0];return d?d[1]:null}
+function parseDoc(raw){
+  const t=raw.replace(/[ \t]+/g,' '),o={};
+  let m;
+  if(/aadhaar|uidai|आधार|unique identification/i.test(t)&&(m=t.match(/\b([2-9]\d{3})\s?(\d{4})\s?(\d{4})\b/))){o.type='Aadhaar card';o.number=m[1]+' '+m[2]+' '+m[3]}
+  else if((m=t.match(/\b[A-Z]{5}\d{4}[A-Z]\b/))&&/income tax|permanent account|PAN/i.test(t)){o.type='PAN card';o.number=m[0]}
+  else if(/passport|republic of india/i.test(t)&&(m=t.match(/\b[A-PR-WY][1-9]\d{6}\b/))){o.type='Passport';o.number=m[0]}
+  else if(/driving licen|DL No|transport/i.test(t)&&(m=t.match(/\b[A-Z]{2}\s?-?\d{2}\s?-?\d{4}\s?\d{7}\b/))){o.type='Driving licence';o.number=m[0]}
+  else if(/election commission|voter|EPIC/i.test(t)&&(m=t.match(/\b[A-Z]{3}\d{7}\b/))){o.type='Voter ID';o.number=m[0]}
+  else if(/policy/i.test(t)&&(m=t.match(/Policy\s*(?:No\.?|Number)\s*[:\-]?\s*([A-Z0-9\/\-]{6,25})/i))){o.type='Insurance policy';o.number=m[1]}
+  let exp=dateAfter(t,/Valid\s*(?:till|upto|up to|until|to)|Date of Expiry|Expiry(?:\s*Date)?|Expires?(?:\s*on)?|Policy\s*(?:End|Expiry)|To Date/i,70);
+  if(!exp){
+    const pi=t.search(/Period of Insurance|Policy Period|Insurance Period/i);
+    if(pi>=0){const ds=findDates(t.slice(pi,pi+120));if(ds.length>1)exp=ds[1][1]}
+  }
+  if(exp)o.expiry=exp;
+  const iss=dateAfter(t,/Date of Issue|Issued(?:\s*on)?|Issue Date|Date of First Issue/i,50);
+  if(iss)o.issued=iss;
+  return o;
+}
+function loadScript(u,test){return new Promise((res,rej)=>{if(test())return res();const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=()=>rej(new Error('Could not load the text reader. Check your internet connection.'));document.head.append(s)})}
+async function toCanvas(blob){
+  const bmp=await createImageBitmap(blob),s=Math.min(1,2400/Math.max(bmp.width,bmp.height));
+  const c=document.createElement('canvas');c.width=Math.round(bmp.width*s);c.height=Math.round(bmp.height*s);
+  const x=c.getContext('2d');x.drawImage(bmp,0,0,c.width,c.height);
+  const im=x.getImageData(0,0,c.width,c.height),d=im.data;let sum=0,n=0;
+  for(let i=0;i<d.length;i+=40){sum+=d[i]*.3+d[i+1]*.59+d[i+2]*.11;n++}
+  const inv=sum/n<110;
+  for(let i=0;i<d.length;i+=4){let g=d[i]*.3+d[i+1]*.59+d[i+2]*.11;if(inv)g=255-g;d[i]=d[i+1]=d[i+2]=g}
+  x.putImageData(im,0,0);return c;
+}
+async function ocr(src,say){
+  await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',()=>!!window.Tesseract);
+  say('Loading the text reader (first time only)...');
+  const w=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')say('Reading text '+Math.round(m.progress*100)+'%')}});
+  try{return (await w.recognize(src)).data.text}finally{await w.terminate()}
+}
+async function extractText(f,say){
+  if(isPdf(f)){
+    if(!window.pdfjsLib)throw new Error('The PDF reader did not load.');
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf=await pdfjsLib.getDocument({data:await f.blob.arrayBuffer()}).promise;
+    let text='';
+    for(let n=1;n<=Math.min(pdf.numPages,6);n++){
+      say('Reading PDF page '+n+'...');
+      const pg=await pdf.getPage(n),tc=await pg.getTextContent(),rows={};
+      tc.items.forEach(it=>{const y=Math.round(it.transform[5]/3);(rows[y]=rows[y]||[]).push(it)});
+      Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{text+=rows[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(' ')+'\n'});
+    }
+    if(text.replace(/\s/g,'').length>=40)return text;
+    text='';
+    for(let n=1;n<=Math.min(pdf.numPages,3);n++){
+      const pg=await pdf.getPage(n),vp=pg.getViewport({scale:2}),c=document.createElement('canvas');
+      c.width=vp.width;c.height=vp.height;
+      await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+      text+='\n'+await ocr(c,say);
+    }
+    return text;
+  }
+  return ocr(await toCanvas(f.blob),say);
+}
+async function scan(){
+  const msg=$('#scanMsg');if(!msg||!F)return;
+  if(!F.files.length){msg.textContent='Add a photo or PDF first, then tap Read details.';return}
+  const btn=$('[data-act="scan"]');if(btn)btn.disabled=true;
+  const say=s=>{const m=$('#scanMsg');if(m)m.textContent=s};
+  say('Reading...');
+  let text='',err='';
+  for(const f of F.files){try{text+='\n'+await extractText(f,say)}catch(e){err=(e&&e.message)||'Could not read the file.'}}
+  if(btn)btn.disabled=false;
+  const m=$('#scanMsg');if(!m||!F)return;
+  if(text.replace(/\s/g,'').length<10){m.textContent=err||'No readable text found. Try a clearer photo.';return}
+  const o=parseDoc(text),done=[];
+  if(o.type&&$('#f_type')){$('#f_type').value=o.type;done.push('Type');if(!$('#f_name').value.trim()){$('#f_name').value=o.type;done.push('Name')}}
+  if(o.number&&$('#f_number')){$('#f_number').value=o.number;done.push('Number')}
+  if(o.expiry&&$('#f_expiry')){$('#f_expiry').value=o.expiry;done.push('Expiry date')}
+  if(o.issued&&$('#f_issued')){$('#f_issued').value=o.issued;done.push('Issue date')}
+  m.textContent=done.length?'Filled: '+done.join(', ')+'. Please check each field before saving.':'Could not find any details. Fill them in by hand.';
+  const det=document.createElement('details');det.innerHTML='<summary>Show the text that was read</summary>';
+  const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;font:12px/1.3 var(--mono);max-height:160px;overflow:auto';pre.textContent=text.trim();
+  det.append(pre);m.append(det);
+}
+
+/* ---------- viewer ---------- */
+let VW=null,vtoken=0;
+async function renderPdf(blob,box){
+  if(!window.pdfjsLib){box.innerHTML='<p>The PDF viewer could not load. Check your internet connection.</p>';return}
+  try{
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf=await pdfjsLib.getDocument({data:await blob.arrayBuffer()}).promise;
+    const w=Math.max(320,box.clientWidth)*Math.min(2,window.devicePixelRatio||1);
+    for(let n=1;n<=pdf.numPages;n++){
+      const p=await pdf.getPage(n),v1=p.getViewport({scale:1}),vp=p.getViewport({scale:w/v1.width});
+      const c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;box.append(c);
+      await p.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+    }
+  }catch(e){box.innerHTML='<p>This PDF could not be shown.</p>'}
+}
+async function drawViewer(){
+  const my=++vtoken,d=VW.doc,f=d.files[VW.i];
+  const v=$('#viewer');v.hidden=false;document.body.classList.add('lock');
+  v.innerHTML=`<div class="vbar"><button class="vb" data-act="vclose">Close</button><div class="vt">${esc(d.name)}<small>${VW.i+1} of ${d.files.length} · ${esc(f.name)}</small></div><button class="vb" data-act="vshare">Share</button></div><div class="vbody" id="vbody"></div>${d.files.length>1?'<div class="vnav"><button data-act="vprev">Previous</button><button data-act="vnext">Next</button></div>':''}`;
+  const body=$('#vbody');
+  if(isPdf(f)){await renderPdf(f.blob,body);if(my!==vtoken)return}
+  else{const img=new Image();img.src=url(f.blob);img.alt='';img.onclick=()=>img.classList.toggle('zoom');body.append(img)}
+}
+function closeViewer(){vtoken++;VW=null;const v=$('#viewer');v.hidden=true;v.innerHTML='';if(!$('#layer').innerHTML)document.body.classList.remove('lock')}
+async function shareFiles(d,fs){
+  const files=fs.map(f=>new File([f.blob],f.name||'document',{type:f.type||'application/octet-stream'}));
+  try{
+    if(navigator.canShare&&navigator.canShare({files})){await navigator.share({files,title:d.name});return}
+  }catch(e){if(e&&e.name==='AbortError')return}
+  files.forEach(f=>{const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.append(a);a.click();a.remove()});
+  toast('Sharing is not available here, so the file was downloaded.');
+}
+
+/* ---------- sheets ---------- */
+function sheet(inner,label){$('#layer').innerHTML=`<div class="back" data-act="close"></div><div class="sheet" role="dialog" aria-label="${esc(label)}">${inner}</div>`;document.body.classList.add('lock')}
+function closeSheet(){$('#layer').innerHTML='';F=null;S.showNum=false;if($('#viewer').hidden)document.body.classList.remove('lock')}
+const thumbs=d=>!d.files||!d.files.length?'':`<div class="thumbs">${d.files.map((f,i)=>`<button class="th" data-act="view" data-id="${d.id}" data-i="${i}" aria-label="Open ${esc(f.name)}">${isPdf(f)?'PDF':`<img src="${url(f.blob)}" alt="">`}</button>`).join('')}</div>`;
+function openDetail(id){
+  const d=docs.find(x=>x.id===id);if(!d)return;
+  const s=status(d);
+  sheet(`<div class="in"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><h2>${esc(d.name)}</h2><span class="pill ${s.k}">${esc(s.t)}</span></div>
+  <div class="card" style="padding:6px 14px">
+  <div class="kv"><span>Type</span><span class="v">${esc(d.type)}</span></div>
+  <div class="kv"><span>Belongs to</span><span class="v">${esc(memberName(d.member))}</span></div>
+  ${d.number?`<div class="kv"><span>Number</span><span class="v mono">${S.showNum?esc(d.number):esc(mask(d.number))} <button class="chip" style="padding:3px 10px;margin-left:6px" data-act="shownum" data-id="${d.id}">${S.showNum?'Hide':'Show'}</button> <button class="chip" style="padding:3px 10px" data-act="copynum" data-id="${d.id}">Copy</button></span></div>`:''}
+  ${d.issued?`<div class="kv"><span>Issued</span><span class="v">${fdate(d.issued)}</span></div>`:''}
+  ${d.expiry?`<div class="kv"><span>Expires</span><span class="v">${fdate(d.expiry)}</span></div>`:''}
+  ${d.notes?`<div class="kv"><span>Notes</span><span class="v" style="white-space:pre-wrap">${esc(d.notes)}</span></div>`:''}</div>
+  ${d.files&&d.files.length?`<span class="label">Files</span>${thumbs(d)}`:'<p class="note">No files attached yet. Tap Edit to add a photo or PDF.</p>'}
+  <div class="acts">${d.files&&d.files.length?`<button class="btn" data-act="shareall" data-id="${d.id}">Share</button>`:''}<button class="btn ghost" data-act="edit" data-id="${d.id}">Edit</button></div></div>`,'Document');
+}
+let F=null;
+function openForm(id){
+  const d=id?docs.find(x=>x.id===id):{type:'Aadhaar card',member:S.member==='all'?cfg.members[0].id:S.member,name:'',number:'',issued:'',expiry:'',notes:'',files:[]};
+  F={id,files:(d.files||[]).slice()};
+  sheet(`<div class="in"><h2>${id?'Edit':'Add'} document</h2>
+  <div class="g2"><label class="fld"><span>Type</span><select id="f_type">${TYPES.map(t=>`<option ${t===d.type?'selected':''}>${t}</option>`).join('')}</select></label>
+  <label class="fld"><span>Belongs to</span><select id="f_member">${cfg.members.map(m=>`<option value="${m.id}" ${m.id===d.member?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label></div>
+  <label class="fld"><span>Name *</span><input id="f_name" value="${esc(d.name)}" placeholder="Passport"></label>
+  <label class="fld"><span>Number</span><input id="f_number" value="${esc(d.number)}" autocomplete="off"></label>
+  <div class="g2"><label class="fld"><span>Issue date</span><input id="f_issued" type="date" value="${esc(d.issued)}"></label><label class="fld"><span>Expiry date</span><input id="f_expiry" type="date" value="${esc(d.expiry)}"></label></div>
+  <label class="fld"><span>Notes</span><textarea id="f_notes" rows="2">${esc(d.notes)}</textarea></label>
+  <div class="fld"><span>Photos or PDFs</span><div id="fileList"></div>
+  <label class="btn ghost" style="margin-top:2px">Take or add photo or PDF<input id="f_files" type="file" accept="image/*,application/pdf" multiple></label>
+  <button type="button" class="btn" data-act="scan" style="margin-top:8px">Read details from file</button><div id="scanMsg" class="note" aria-live="polite"></div></div>
+  <div class="acts"><button class="btn" data-act="saveform">Save</button>${id?'<button class="btn bad" data-act="delform">Delete</button>':''}</div></div>`,'Document form');
+  fileList();
+}
+function fileList(){const el=$('#fileList');if(!el)return;el.innerHTML=F.files.map((f,i)=>`<div class="frow"><span>${esc(f.name)}</span><button type="button" data-act="rmfile" data-i="${i}">Remove</button></div>`).join('')}
+async function saveForm(){
+  const type=$('#f_type').value,name=$('#f_name').value.trim()||type;
+  const d=Object.assign({},F.id?docs.find(x=>x.id===F.id):{id:uid()},{type,name,member:$('#f_member').value,number:$('#f_number').value.trim(),issued:$('#f_issued').value,expiry:$('#f_expiry').value,notes:$('#f_notes').value.trim(),files:F.files});
+  delete d.sample;
+  await putDoc(d);closeSheet();render();toast('Saved');
+}
+function openSettings(){
+  const sample=docs.some(d=>d.sample);
+  sheet(`<div class="in"><h2>Settings</h2>
+  <span class="label">Family members</span>
+  ${cfg.members.map(m=>`<div class="g2" style="grid-template-columns:1fr auto;align-items:end"><label class="fld"><span>Name</span><input class="mname" data-id="${m.id}" value="${esc(m.name)}"></label>${cfg.members.length>1?`<button class="btn bad" data-act="rmmember" data-id="${m.id}" style="min-height:44px">Remove</button>`:'<span></span>'}</div>`).join('')}
+  <div class="g2" style="grid-template-columns:1fr auto;align-items:end"><label class="fld"><span>Add a member</span><input id="newMember" placeholder="Mom"></label><button class="btn ghost" data-act="addmember" style="min-height:44px">Add</button></div>
+  <label class="fld"><span>Warn me before expiry</span><select id="s_warn">${WARN.map(w=>`<option value="${w}" ${w===cfg.warn?'selected':''}>${w} days</option>`).join('')}</select></label>
+  <label class="fld"><span>Appearance</span><select id="s_theme"><option value="" ${cfg.theme===''?'selected':''}>Follow phone</option><option value="light" ${cfg.theme==='light'?'selected':''}>Light</option><option value="dark" ${cfg.theme==='dark'?'selected':''}>Dark</option></select></label>
+  <div class="acts"><button class="btn" data-act="savesettings">Save</button></div>
+  <h3 style="margin-top:6px">App lock</h3>
+  <p class="note" style="margin:0">${cfg.pin?'A PIN is set. The app locks after you leave it for 30 seconds.':'Set a PIN so nobody can open the app on your phone. The PIN keeps others out of the app. It does not encrypt the files.'}</p>
+  <div class="acts"><button class="btn ghost" data-act="setpin">${cfg.pin?'Change PIN':'Set a PIN'}</button>${cfg.pin?'<button class="btn ghost" data-act="rmpin">Remove PIN</button>':''}</div>
+  <h3 style="margin-top:6px">Your data</h3>
+  <div class="acts"><button class="btn ghost" data-act="backup">Download backup</button><label class="btn ghost">Restore backup<input id="restoreIn" type="file" accept=".json,application/json"></label></div>
+  ${sample?'<button class="btn ghost" data-act="rmsample">Remove sample documents</button>':''}
+  <button class="btn bad" data-act="wipe">Delete everything</button>
+  <p class="note">Everything stays on this phone. Clearing Chrome's site data deletes it, so download a backup now and then. To install: Chrome menu, then Add to Home screen.</p></div>`,'Settings');
+}
+function openPin(){
+  sheet(`<div class="in"><h2>${cfg.pin?'Change PIN':'Set a PIN'}</h2>
+  <label class="fld"><span>New PIN (4 to 6 digits)</span><input id="pin1" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+  <label class="fld"><span>Repeat PIN</span><input id="pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+  <p class="note" style="margin:0">If you forget the PIN, the only way back in is to erase all data in the app, so keep a backup.</p><div id="pinErr" class="err"></div>
+  <div class="acts"><button class="btn" data-act="savepin">Save PIN</button><button class="btn ghost" data-act="close">Cancel</button></div></div>`,'PIN');
+}
+
+/* ---------- backup ---------- */
+function b64(blob){return new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]||'');fr.onerror=()=>res('');fr.readAsDataURL(blob)})}
+function fromB64(d,t){const bin=atob(d),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return new Blob([u],{type:t})}
+async function backup(){
+  toast('Preparing backup...');
+  const out=[];
+  for(const d of docs){out.push(Object.assign({},d,{files:await Promise.all((d.files||[]).map(async f=>({name:f.name,type:f.type,data:await b64(f.blob)})))}))}
+  const text=JSON.stringify({app:'family-locker',v:1,members:cfg.members,docs:out});
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download='family-locker-backup-'+today()+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+async function restore(file){
+  try{
+    const j=JSON.parse(await file.text());if(j.app!=='family-locker'||!Array.isArray(j.docs))throw 0;
+    (j.members||[]).forEach(m=>{if(m&&m.id&&!cfg.members.some(x=>x.id===m.id))cfg.members.push(m)});
+    let n=0;
+    for(const d of j.docs){if(!d||!d.id||docs.some(x=>x.id===d.id))continue;d.files=(d.files||[]).filter(f=>f&&f.data).map(f=>({name:f.name,type:f.type,blob:fromB64(f.data,f.type)}));await putDoc(d);n++}
+    saveCfg();closeSheet();render();toast('Restored '+n+' documents');
+  }catch(e){toast('That is not a Family Locker backup.')}
+}
+
+/* ---------- main view ---------- */
+const lockSvg='<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+function render(){
+  applyTheme();
+  if(S.locked){
+    $('#app').innerHTML=`<div class="lockv"><div class="lockic">${lockSvg}</div><h1>Family Locker</h1><p class="muted" style="margin:0">Enter your PIN</p><input id="pinIn" type="password" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="PIN"><button class="btn" data-act="unlock">Unlock</button><div id="pinErr" class="err" aria-live="polite"></div><button class="chip" data-act="forgot">Forgot PIN?</button></div>`;
+    const i=$('#pinIn');if(i){i.focus();i.addEventListener('keydown',e=>{if(e.key==='Enter')unlock()})}
+    return;
+  }
+  const mine=docs.filter(d=>S.member==='all'||d.member===S.member);
+  const sorted=mine.slice().sort((a,b)=>status(a).n-status(b).n||a.name.localeCompare(b.name));
+  const cnt=k=>mine.filter(d=>status(d).k===k).length;
+  const attn=sorted.filter(d=>{const k=status(d).k;return k==='bad'||k==='warn'});
+  const rest=sorted.filter(d=>!attn.includes(d));
+  const rowH=d=>{const s=status(d);return `<button class="row" data-act="open" data-id="${d.id}"><span class="n"><b>${esc(d.name)}</b><div class="s">${esc(d.type)}${S.member==='all'&&cfg.members.length>1?' · '+esc(memberName(d.member)):''}${d.number?' · '+esc(mask(d.number)):''}${d.files&&d.files.length?' · '+d.files.length+' file'+(d.files.length>1?'s':''):''}</div></span><span class="pill ${s.k}">${esc(s.t)}</span></button>`};
+  const icon=isDark()?'<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>':'<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>';
+  $('#app').innerHTML=`<header class="head"><span class="brand">Family Locker</span><div class="tools">${cfg.pin?`<button class="ib" data-act="locknow" aria-label="Lock now">${lockSvg}</button>`:''}<button class="ib" data-act="theme" aria-label="Switch theme"><svg viewBox="0 0 24 24">${icon}</svg></button><button class="ib" data-act="settings" aria-label="Settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg></button></div></header>
+  ${docs.some(d=>d.sample)?'<div class="banner"><span>These are sample documents.</span><button class="chip" data-act="rmsample">Remove</button></div>':''}
+  <div class="stats"><div class="stat bad"><span class="label">Expired</span><b>${cnt('bad')}</b></div><div class="stat warn"><span class="label">Expiring</span><b>${cnt('warn')}</b></div><div class="stat ok"><span class="label">Valid</span><b>${cnt('ok')+cnt('none')}</b></div></div>
+  ${cfg.members.length>1?`<div class="chips"><button class="chip ${S.member==='all'?'on':''}" data-act="member" data-id="all">Everyone</button>${cfg.members.map(m=>`<button class="chip ${S.member===m.id?'on':''}" data-act="member" data-id="${m.id}">${esc(m.name)}</button>`).join('')}</div>`:''}
+  ${attn.length?`<section class="sec"><h2>Needs attention</h2><div class="list">${attn.map(rowH).join('')}</div></section>`:''}
+  <section class="sec"><h2>${attn.length?'All other documents':'Documents'}</h2>${rest.length?`<div class="list">${rest.map(rowH).join('')}</div>`:(attn.length?'<p class="note">Nothing else.</p>':'<div class="empty">No documents yet.<br>Tap Add, take a photo of an ID or policy, and set its expiry date.</div>')}</section>
+  <button class="btn fab" data-act="add">+ Add</button>`;
+}
+async function unlock(){
+  const v=($('#pinIn')||{}).value||'',e=$('#pinErr');
+  if(!v)return;
+  if(await hashPin(v,cfg.salt)===cfg.pin){S.locked=false;render()}
+  else{if(e)e.textContent='Wrong PIN. Try again.';const i=$('#pinIn');if(i){i.value='';i.focus()}}
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('[data-act]');if(!b)return;
+  const a=b.dataset.act,id=b.dataset.id;e.preventDefault();
+  switch(a){
+    case 'unlock':unlock();break;
+    case 'forgot':
+      if(!b.dataset.arm){b.dataset.arm=1;b.textContent='Tap again to erase everything and reset';break}
+      await wipeAll();break;
+    case 'locknow':lockNow();break;
+    case 'theme':cfg.theme=isDark()?'light':'dark';saveCfg();render();break;
+    case 'member':S.member=id;render();break;
+    case 'settings':openSettings();break;
+    case 'add':openForm();break;
+    case 'open':openDetail(id);break;
+    case 'edit':openForm(id);break;
+    case 'close':closeSheet();break;
+    case 'shownum':S.showNum=!S.showNum;openDetail(id);break;
+    case 'copynum':{const d=docs.find(x=>x.id===id);try{navigator.clipboard.writeText(d.number).then(()=>toast('Copied'),()=>toast('Could not copy.'))}catch(err){toast('Could not copy.')}break}
+    case 'shareall':{const d=docs.find(x=>x.id===id);shareFiles(d,d.files);break}
+    case 'view':{const d=docs.find(x=>x.id===id);VW={doc:d,i:+b.dataset.i};drawViewer();break}
+    case 'vclose':closeViewer();break;
+    case 'vprev':VW.i=(VW.i-1+VW.doc.files.length)%VW.doc.files.length;drawViewer();break;
+    case 'vnext':VW.i=(VW.i+1)%VW.doc.files.length;drawViewer();break;
+    case 'vshare':shareFiles(VW.doc,[VW.doc.files[VW.i]]);break;
+    case 'rmfile':F.files.splice(+b.dataset.i,1);fileList();break;
+    case 'scan':scan();break;
+    case 'saveform':saveForm();break;
+    case 'delform':
+      if(!b.dataset.arm){b.dataset.arm=1;b.textContent='Tap again to delete';break}
+      delDoc(F.id);closeSheet();render();toast('Deleted');break;
+    case 'addmember':{const v=$('#newMember').value.trim();if(!v)break;cfg.members.push({id:uid(),name:v});saveCfg();openSettings();render();break}
+    case 'rmmember':
+      if(!b.dataset.arm){b.dataset.arm=1;b.textContent='Tap again';break}
+      {const first=cfg.members.find(m=>m.id!==id).id;for(const d of docs.filter(x=>x.member===id)){d.member=first;await putDoc(d)}
+      cfg.members=cfg.members.filter(m=>m.id!==id);if(S.member===id)S.member='all';saveCfg();openSettings();render()}break;
+    case 'savesettings':
+      document.querySelectorAll('.mname').forEach(i=>{const m=cfg.members.find(x=>x.id===i.dataset.id);if(m&&i.value.trim())m.name=i.value.trim()});
+      cfg.warn=+$('#s_warn').value;cfg.theme=$('#s_theme').value;saveCfg();closeSheet();render();toast('Saved');break;
+    case 'setpin':openPin();break;
+    case 'savepin':{
+      const p1=$('#pin1').value,p2v=$('#pin2').value,er=$('#pinErr');
+      if(!/^\d{4,6}$/.test(p1)){er.textContent='Use 4 to 6 digits.';break}
+      if(p1!==p2v){er.textContent='The two PINs do not match.';break}
+      cfg.salt=uid()+uid();cfg.pin=await hashPin(p1,cfg.salt);saveCfg();closeSheet();render();toast('PIN set');break}
+    case 'rmpin':cfg.pin='';cfg.salt='';saveCfg();openSettings();render();toast('PIN removed');break;
+    case 'backup':backup();break;
+    case 'rmsample':for(const d of docs.filter(x=>x.sample))delDoc(d.id);closeSheet();render();break;
+    case 'wipe':
+      if(!b.dataset.arm){b.dataset.arm=1;b.textContent='Tap again to delete everything';break}
+      await wipeAll();break;
+  }
+});
+async function wipeAll(){
+  for(const d of docs.slice())delDoc(d.id);
+  cfg.members=[{id:'m1',name:'Me'}];cfg.pin='';cfg.salt='';cfg.seeded=true;saveCfg();
+  S.locked=false;S.member='all';closeSheet();closeViewer();render();toast('Everything deleted');
+}
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t.id==='f_files'){F.files.push(...[...t.files].map(f=>({name:f.name,type:f.type,blob:f})));t.value='';fileList()}
+  else if(t.id==='restoreIn'){const f=t.files[0];t.value='';if(f)restore(f)}
+  else if(t.id==='f_type'&&$('#f_name')&&!$('#f_name').value.trim())$('#f_name').value=t.value;
+});
+
+/* ---------- start ---------- */
+(async()=>{
+  loadCfg();
+  db=await openDB();
+  try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+  docs=await dbAll();
+  if(!docs.length&&!cfg.seeded){
+    cfg.members=[{id:'m1',name:'Me'},{id:'m2',name:'Mom'}];
+    const base={files:[],sample:true,notes:'',issued:''};
+    for(const d of [
+      {type:'Passport',name:'Passport',member:'m1',number:'K1234567',expiry:addDays(today(),45)},
+      {type:'Insurance policy',name:'Car insurance',member:'m1',number:'POL/2024/889211',expiry:addDays(today(),-12)},
+      {type:'PAN card',name:'PAN card',member:'m1',number:'ABCDE1234F',expiry:''},
+      {type:'Driving licence',name:'Driving licence',member:'m2',number:'KA0120190012345',expiry:addDays(today(),430)}
+    ])await putDoc(Object.assign({id:uid()},base,d));
+    cfg.seeded=true;saveCfg();
+  }
+  if(cfg.pin)S.locked=true;
+  render();
+  if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+})();
+})();
+</script>
+</body></html>
